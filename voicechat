@@ -1,0 +1,89 @@
+video-chat/
+├── server.js
+├── package.json
+└── public/
+    ├── index.html
+    ├── script.js
+    └── style.css
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
+app.use(express.static('public'));
+
+const groups = {}; // { groupId: [socket1, socket2, ...] }
+
+io.on('connection', (socket) => {
+  console.log('New user connected:', socket.id);
+
+  socket.on('join-group', (groupId) => {
+    socket.groupId = groupId;
+    if (!groups[groupId]) groups[groupId] = [];
+
+    // Remove if already exists (prevent duplicates)
+    groups[groupId] = groups[groupId].filter(s => s.id !== socket.id);
+    groups[groupId].push(socket);
+
+    tryMatchInGroup(groupId);
+  });
+
+  socket.on('signal', data => {
+    if (socket.partner) {
+      socket.partner.emit('signal', data);
+    }
+  });
+
+  socket.on('next', () => {
+    disconnectPartner(socket);
+    tryMatchInGroup(socket.groupId);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+    disconnectPartner(socket);
+    if (socket.groupId && groups[socket.groupId]) {
+      groups[socket.groupId] = groups[socket.groupId].filter(s => s.id !== socket.id);
+    }
+  });
+
+  function disconnectPartner(socket) {
+    if (socket.partner) {
+      socket.partner.emit('disconnectPeer');
+      socket.partner.partner = null;
+      socket.partner = null;
+    }
+  }
+
+  function tryMatchInGroup(groupId) {
+    const waiting = groups[groupId].filter(s => !s.partner);
+    if (waiting.length >= 2) {
+      const [a, b] = [waiting[0], waiting[1]];
+      a.partner = b;
+      b.partner = a;
+
+      a.emit('match', { initiator: true });
+      b.emit('match', { initiator: false });
+    }
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
+{
+  "name": "video-chat",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2"
+  }
+}
